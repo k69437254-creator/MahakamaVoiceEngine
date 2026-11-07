@@ -20,6 +20,7 @@ import com.aram.voiceengine.api.EngineResult
 import com.aram.voiceengine.api.TtsRequest
 import com.aram.voiceengine.core.AtomicGenerationCancellation
 import com.aram.voiceengine.runtime.MossTtsEngine
+import com.aram.voiceengine.runtime.MossReferenceAudioEncoder
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +51,8 @@ class IshtarPlaybackService : Service() {
         const val EXTRA_URI = "com.aram.voiceengine.app.extra.URI"
         const val EXTRA_TEXT = "com.aram.voiceengine.app.extra.TEXT"
         const val EXTRA_VOICE_ID = "com.aram.voiceengine.app.extra.VOICE_ID"
+        const val EXTRA_REFERENCE_AUDIO_URI = "com.aram.voiceengine.app.extra.REFERENCE_AUDIO_URI"
+        const val ACTION_GENERATION_FINISHED = "com.aram.voiceengine.app.action.GENERATION_FINISHED"
         private const val CHANNEL_ID = "ishtar_playback"
         private const val NOTIFICATION_ID = 8417
     }
@@ -107,6 +110,7 @@ class IshtarPlaybackService : Service() {
         currentUri = null
         val text = intent.getStringExtra(EXTRA_TEXT).orEmpty()
         val voiceId = intent.getStringExtra(EXTRA_VOICE_ID)
+        val referenceAudioUri = intent.getStringExtra(EXTRA_REFERENCE_AUDIO_URI)
         val token = AtomicGenerationCancellation()
         cancellation = token
         currentMessage = "تهيئة محرك MOSS"
@@ -123,12 +127,20 @@ class IshtarPlaybackService : Service() {
             var localWakeLock: PowerManager.WakeLock? = null
             try {
                 require(text.isNotBlank()) { "أرسل نصًا غير فارغ إلى خدمة التوليد." }
-                require(!voiceId.isNullOrBlank()) { "يتطلب التوليد معرف صوت تختاره صراحةً؛ لا يوجد صوت افتراضي." }
+                require(!voiceId.isNullOrBlank() || !referenceAudioUri.isNullOrBlank()) {
+                    "اختر تسجيلًا مرجعيًا صريحًا أو معرف صوت معتمدًا؛ لا يوجد صوت افتراضي."
+                }
                 val wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
                     .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ISHTAR:MossGeneration")
                     .apply { setReferenceCounted(false); acquire(60L * 60L * 1000L) }
                 localWakeLock = wakeLock
                 generationWakeLock = wakeLock
+                val referenceAudio = if (!referenceAudioUri.isNullOrBlank()) {
+                    val decoded = AndroidReferenceAudioDecoder.decode(applicationContext, Uri.parse(referenceAudioUri))
+                    MossReferenceAudioEncoder(applicationContext).use { encoder ->
+                        encoder.encode(decoded.samples, decoded.sampleRate, decoded.channels)
+                    }
+                } else null
                 val activeEngine = MossTtsEngine(applicationContext, cpuThreads = 2)
                 localEngine = activeEngine
                 engine = activeEngine
@@ -138,9 +150,13 @@ class IshtarPlaybackService : Service() {
                 }
                 if (token.isCancelled()) throw CancellationException("cancelled")
 
-                val sampleRate = 48000
-                val channels = 2
-                val channelMask = AudioFormat.CHANNEL_OUT_STEREO
+                val sampleRate = referenceAudio?.sampleRate ?: 48000
+                val channels = referenceAudio?.channels ?: 2
+                val channelMask = when (channels) {
+                    1 -> AudioFormat.CHANNEL_OUT_MONO
+                    2 -> AudioFormat.CHANNEL_OUT_STEREO
+                    else -> error("صيغة قنوات الصوت غير مدعومة: $channels")
+                }
                 val minBytes = AudioTrack.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
                 require(minBytes > 0) { "AudioTrack لا يدعم 48 kHz stereo PCM على هذا الجهاز (code=$minBytes)." }
                 val track = AudioTrack.Builder()
@@ -169,6 +185,7 @@ class IshtarPlaybackService : Service() {
                 val result = activeEngine.synthesize(TtsRequest(
                     text = text,
                     voiceId = voiceId,
+                    promptAudioCodes = referenceAudio?.promptAudioCodes,
                     cancellation = token,
                 )) { chunk ->
                     if (token.isCancelled()) throw CancellationException("cancelled")
@@ -197,6 +214,7 @@ class IshtarPlaybackService : Service() {
                         getSharedPreferences("ishtar_settings", MODE_PRIVATE).edit()
                             .putString("last_generated_wav", generatedFile.absolutePath)
                             .putLong("last_generated_at", System.currentTimeMillis()).apply()
+                        sendBroadcast(Intent(ACTION_GENERATION_FINISHED).setPackage(packageName))
                         withContext(Dispatchers.Main) {
                             currentMessage = "اكتمل التوليد · ${result.value.generatedAudioDurationMs / 1000}s"
                             Toast.makeText(this@IshtarPlaybackService, "اكتمل توليد الصوت وحُفظ ملف WAV.", Toast.LENGTH_LONG).show()

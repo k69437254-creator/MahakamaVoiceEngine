@@ -5,6 +5,9 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.ProgressDialog
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.IntentFilter
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -23,6 +26,8 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.FileProvider
+import java.io.File
 import android.text.Editable
 import android.text.InputFilter
 import android.text.TextWatcher
@@ -45,6 +50,14 @@ class MainActivity : Activity() {
     private var drawerOverlay: View? = null
     private var pendingAudioExportUri: Uri? = null
     private var modelDialog: ProgressDialog? = null
+    private var pendingGeneratedExportPath: String? = null
+    private var generationReceiverRegistered = false
+
+    private val generationReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (::root.isInitialized && (page == "studio" || page == "history")) render()
+        }
+    }
 
     private val bg = Color.rgb(10, 8, 17)
     private val surface = Color.rgb(22, 18, 32)
@@ -62,6 +75,7 @@ class MainActivity : Activity() {
         const val REQUEST_SAVE_TEXT = 7102
         const val REQUEST_SAVE_AUDIO = 7103
         const val REQUEST_NOTIFICATIONS = 7104
+        const val REQUEST_SAVE_GENERATED_AUDIO = 7105
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,6 +102,26 @@ class MainActivity : Activity() {
         beginModelSetup()
     }
 
+
+    override fun onStart() {
+        super.onStart()
+        val filter = IntentFilter(IshtarPlaybackService.ACTION_GENERATION_FINISHED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(generationReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(generationReceiver, filter)
+        }
+        generationReceiverRegistered = true
+    }
+
+    override fun onStop() {
+        if (generationReceiverRegistered) {
+            try { unregisterReceiver(generationReceiver) } catch (_: Exception) { }
+            generationReceiverRegistered = false
+        }
+        super.onStop()
+    }
 
     private fun beginModelSetup() {
         if (ModelDownloadManager.isInstalled(this)) return
@@ -452,38 +486,36 @@ class MainActivity : Activity() {
             bottomMargin = dp(13)
         })
 
-        sectionTitle(parent, "محرك التوليد", "لن نظهر زرًا يوحي بأن التوليد يعمل قبل ربط المحرك")
-        val engineCard = card(parent)
-        engineCard.addView(pill("MOSS PIPELINE INTEGRATED", violetBright))
+        sectionTitle(parent, "محرك التوليد", "توليد محلي متدفق عبر MOSS وONNX Runtime")
+        val engineCard = card(parent, true)
+        engineCard.addView(pill("MOSS · ONNX · STREAMING", violetBright))
         gap(engineCard, 10)
-        engineCard.addView(label("مسار التوليد والبث مدمج", 16f, white, 2))
+        engineCard.addView(label("حوّل النص إلى ملف صوتي", 17f, white, 2))
         engineCard.addView(label(
-            "تم ربط جلسات MOSS وSentencePiece وفك Codec المتدفق وخدمة AudioTrack. يتطلب بدء التوليد معرف صوت صريحًا أو بيانات صوت مرجعي؛ لم نختر صوتًا افتراضيًا.",
+            "يُرمّز التسجيل المرجعي الذي تختاره على الجهاز، ثم يمر النص عبر محرك MOSS ويُبث الصوت تدريجيًا مع حفظ نسخة WAV. لا يوجد صوت افتراضي ولا اختيار تلقائي.",
             11f,
             muted
         ))
-        gap(engineCard, 12)
-        val disabled = label("◉   بانتظار اعتماد مصدر صوت مرجعي", 13f, muted, 2, Gravity.CENTER).apply {
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-            background = panel(14, Color.rgb(42, 36, 51))
-            alpha = 0.75f
-        }
-        engineCard.addView(disabled)
+        gap(engineCard, 13)
+        engineCard.addView(primaryButton("ابدأ توليد الصوت  ←") { synthesizeDraft() })
 
         sectionTitle(parent, "الصوت والاختيار", "لا يوجد صوت افتراضي معتمد")
         actionCard(parent, "مكتبة الأصوات", "اختيار الأصوات مؤجل حتى اكتمال المحرك وبموافقتك", true) { go("voices") }
 
-        sectionTitle(parent, "تشغيل ملف صوتي", "تشغيل ملف موجود مع إمكانية استمرار التشغيل بالخلفية")
+        lastGeneratedFile()?.let { generatedAudioCard(parent, it) }
+
+        sectionTitle(parent, "الصوت المرجعي", "اختر تسجيلًا تملك حق استخدامه ليكون مرجعًا لهذا التوليد")
         val audioCard = card(parent)
         if (selectedAudioUri.isNullOrBlank()) {
-            audioCard.addView(label("لم تختر ملفًا صوتيًا بعد", 13f, white, 2))
-            audioCard.addView(label("يمكنك اختيار ملف صوتي محفوظ للاستماع إليه، وسيظهر إشعار تحكم دائم أثناء التشغيل.", 11f, muted))
+            audioCard.addView(label("لم تختر تسجيلًا مرجعيًا بعد", 13f, white, 2))
+            audioCard.addView(label("اختر ملفًا صوتيًا واضحًا. سيُحوّله المحرك إلى رموز مرجعية محليًا عند بدء التوليد.", 11f, muted))
         } else {
-            audioCard.addView(label("يوجد ملف صوتي محدد", 13f, white, 2))
+            audioCard.addView(label("التسجيل المرجعي محدد", 13f, white, 2))
+            audioCard.addView(label("سيُستخدم كمرجع للتوليد ويمكنك تشغيله أو تصديره.", 10f, muted))
             audioCard.addView(label(selectedAudioUri ?: "", 9f, muted))
         }
         gap(audioCard, 12)
-        audioCard.addView(primaryButton("اختيار ملف صوتي") { openAudioPicker() })
+        audioCard.addView(primaryButton("اختيار الصوت المرجعي") { openAudioPicker() })
         if (!selectedAudioUri.isNullOrBlank()) {
             gap(audioCard, 8)
             audioCard.addView(secondaryButton("تشغيل في الخلفية") { playSelectedAudio() })
@@ -498,6 +530,31 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(5) })
             audioCard.addView(exportRow)
         }
+    }
+
+    private fun lastGeneratedFile(): File? {
+        val path = prefs.getString("last_generated_wav", null) ?: return null
+        return File(path).takeIf { it.isFile && it.length() > 44L }
+    }
+
+    private fun generatedAudioCard(parent: LinearLayout, file: File) {
+        sectionTitle(parent, "آخر ملف مولّد", "WAV · ${(file.length() / 1024L)} KB")
+        val output = card(parent)
+        output.addView(label(file.name, 12f, white, 2))
+        gap(output, 6)
+        output.addView(label("حُفظ الملف داخل مساحة التطبيق الخاصة.", 10f, muted))
+        gap(output, 10)
+        output.addView(primaryButton("تشغيل الملف") { playGeneratedAudio() })
+        gap(output, 7)
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        actions.addView(secondaryButton("حفظ WAV") { saveGeneratedAudioCopy() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(5) })
+        actions.addView(secondaryButton("مشاركة") { shareGeneratedAudio() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(5) })
+        output.addView(actions, LinearLayout.LayoutParams(-1, -2))
     }
 
     private fun voices(parent: LinearLayout) {
@@ -525,6 +582,10 @@ class MainActivity : Activity() {
 
     private fun history(parent: LinearLayout) {
         sectionTitle(parent, "سجل الأعمال", "مكان واحد للنصوص والملفات التي ينتجها المحرك")
+        lastGeneratedFile()?.let {
+            generatedAudioCard(parent, it)
+            return
+        }
         val empty = card(parent, true)
         gap(empty, 17)
         empty.addView(label("◷", 38f, violetBright, 3, Gravity.CENTER))
@@ -724,6 +785,88 @@ class MainActivity : Activity() {
         startActivity(Intent.createChooser(intent, "مشاركة نص عشتار"))
     }
 
+    private fun synthesizeDraft() {
+        if (draft.isBlank()) {
+            notice("اكتب النص الذي تريد تحويله إلى صوت أولًا.")
+            return
+        }
+        val reference = selectedAudioUri
+        if (reference.isNullOrBlank()) {
+            notice("اختر تسجيلًا مرجعيًا من قسم الصوت المرجعي أولًا.")
+            return
+        }
+        if (!ModelDownloadManager.isInstalled(this)) {
+            notice("لم يكتمل تجهيز ملفات النموذج بعد. افتح التطبيق بعد اكتمال التهيئة.")
+            return
+        }
+        requestNotificationPermissionIfNeeded()
+        val intent = Intent(this, IshtarPlaybackService::class.java).apply {
+            action = IshtarPlaybackService.ACTION_SYNTHESIZE
+            putExtra(IshtarPlaybackService.EXTRA_TEXT, draft)
+            putExtra(IshtarPlaybackService.EXTRA_REFERENCE_AUDIO_URI, reference)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
+            else startService(intent)
+            notice("بدأ تجهيز المرجع والتوليد المتدفق.")
+        } catch (error: Exception) {
+            notice("تعذر بدء التوليد: ${error.message ?: "خطأ غير معروف"}")
+        }
+    }
+
+    private fun playGeneratedAudio() {
+        val file = lastGeneratedFile()
+        if (file == null) {
+            notice("لا يوجد ملف صوتي مولّد متاح.")
+            return
+        }
+        val intent = Intent(this, IshtarPlaybackService::class.java).apply {
+            action = IshtarPlaybackService.ACTION_PLAY
+            putExtra(IshtarPlaybackService.EXTRA_URI, Uri.fromFile(file).toString())
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
+            else startService(intent)
+        } catch (error: Exception) {
+            notice("تعذر تشغيل الملف: ${error.message ?: "خطأ"}")
+        }
+    }
+
+    private fun saveGeneratedAudioCopy() {
+        val file = lastGeneratedFile()
+        if (file == null) {
+            notice("لا يوجد ملف صوتي مولّد متاح.")
+            return
+        }
+        pendingGeneratedExportPath = file.absolutePath
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/wav"
+            putExtra(Intent.EXTRA_TITLE, file.name)
+        }
+        startActivityForResult(intent, REQUEST_SAVE_GENERATED_AUDIO)
+    }
+
+    private fun shareGeneratedAudio() {
+        val file = lastGeneratedFile()
+        if (file == null) {
+            notice("لا يوجد ملف صوتي مولّد متاح.")
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "audio/wav"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = ClipData.newUri(contentResolver, "ISHTAR WAV", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "مشاركة ملف عشتار الصوتي"))
+        } catch (error: Exception) {
+            notice("تعذرت مشاركة الملف: ${error.message ?: "خطأ"}")
+        }
+    }
+
     private fun openAudioPicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -797,6 +940,27 @@ class MainActivity : Activity() {
         val destination = data?.data ?: return
 
         when (requestCode) {
+            REQUEST_SAVE_GENERATED_AUDIO -> {
+                val sourcePath = pendingGeneratedExportPath
+                pendingGeneratedExportPath = null
+                if (sourcePath.isNullOrBlank()) {
+                    notice("مصدر ملف WAV غير متاح.")
+                    return
+                }
+                try {
+                    val source = File(sourcePath)
+                    if (!source.isFile) throw IllegalStateException("ملف WAV لم يعد موجودًا.")
+                    val input = source.inputStream()
+                    val output = contentResolver.openOutputStream(destination)
+                        ?: throw IllegalStateException("تعذر فتح وجهة الحفظ.")
+                    input.use { sourceStream ->
+                        output.use { targetStream -> sourceStream.copyTo(targetStream) }
+                    }
+                    notice("تم حفظ ملف WAV الناتج.")
+                } catch (error: Exception) {
+                    notice("تعذر حفظ ملف WAV: ${error.message ?: "خطأ"}")
+                }
+            }
             REQUEST_OPEN_AUDIO -> {
                 try {
                     contentResolver.takePersistableUriPermission(

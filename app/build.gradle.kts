@@ -41,4 +41,5 @@ dependencies {
     implementation(project(":engine"))
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("androidx.core:core:1.15.0")
 }

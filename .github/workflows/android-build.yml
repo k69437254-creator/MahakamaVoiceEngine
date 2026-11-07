@@ -36,6 +36,19 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-36" "build-tools;34.0.0" "platform-tools" "ndk;27.2.12479018" "cmake;3.22.1"
 
+      - name: Install matching host protoc
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROTOC_ZIP="$RUNNER_TEMP/protoc-36.2.zip"
+          PROTOC_DIR="$RUNNER_TEMP/protoc"
+          curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-linux-x86_64.zip" -o "$PROTOC_ZIP"
+          echo "121f6c7afe1d4d0e3ea6aab9432038599250134cbf4474cb1167d2c7decd4278  $PROTOC_ZIP" | sha256sum --check
+          mkdir -p "$PROTOC_DIR"
+          unzip -q "$PROTOC_ZIP" -d "$PROTOC_DIR"
+          echo "$PROTOC_DIR/bin" >> "$GITHUB_PATH"
+          "$PROTOC_DIR/bin/protoc" --version
+
       - name: Build APK
         run: |
           chmod +x gradlew

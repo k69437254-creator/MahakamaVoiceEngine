@@ -3,6 +3,15 @@ project(ishtar_tokenizer LANGUAGES CXX)
 
 include(FetchContent)
 
+# Use host protoc during the Android cross-build.
+find_program(HOST_PROTOC_EXECUTABLE protoc REQUIRED)
+set(
+    SPM_PROTOC_EXECUTABLE
+    "${HOST_PROTOC_EXECUTABLE}"
+    CACHE FILEPATH "Host protoc used to generate SentencePiece sources"
+    FORCE
+)
+
 set(SPM_ENABLE_SHARED OFF CACHE BOOL "" FORCE)
 set(SPM_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(SPM_ENABLE_BENCHMARK OFF CACHE BOOL "" FORCE)

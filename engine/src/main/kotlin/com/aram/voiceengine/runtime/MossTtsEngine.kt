@@ -20,9 +20,9 @@ import java.nio.FloatBuffer
 import java.nio.IntBuffer
 import java.security.SecureRandom
 import java.util.LinkedHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -36,7 +36,13 @@ class MossTtsEngine(
     private val appContext = context.applicationContext
     private val gate = Mutex()
     private val activeRunOptions = AtomicReference<OrtSession.RunOptions?>(null)
-    private val releaseRequested = AtomicBoolean(false)
+
+    private data class LifecycleState(
+        val generation: Long = 0L,
+        val pendingReleases: Int = 0,
+    )
+
+    private val lifecycleState = AtomicReference(LifecycleState())
     @Volatile private var runtime: RuntimeBundle? = null
 
     override val info = EngineInfo(
@@ -50,12 +56,24 @@ class MossTtsEngine(
     )
 
     override suspend fun initialize(): EngineResult<Unit> {
+        val lifecycleAtRequest = lifecycleState.get()
         gate.lock()
-        releaseRequested.set(false)
         return try {
-            withContext(Dispatchers.IO) {
-                if (runtime == null) runtime = createRuntime()
-                EngineResult.Success(Unit)
+            if (isLifecycleRequestInvalidated(lifecycleAtRequest)) {
+                EngineResult.Failure(
+                    EngineError("LIFECYCLE_INVALIDATED", "تجاوز طلب التهيئة طلب تحرير أحدث للمحرك.")
+                )
+            } else {
+                withContext(Dispatchers.IO) {
+                    if (runtime == null) runtime = createRuntime()
+                    if (isLifecycleRequestInvalidated(lifecycleAtRequest)) {
+                        EngineResult.Failure(
+                            EngineError("LIFECYCLE_INVALIDATED", "أُلغي طلب التهيئة بسبب تحرير المحرك.")
+                        )
+                    } else {
+                        EngineResult.Success(Unit)
+                    }
+                }
             }
         } catch (error: Throwable) {
             EngineResult.Failure(EngineError("INITIALIZATION_FAILED", error.message ?: "تعذر تهيئة محرك MOSS", error, true))
@@ -68,9 +86,25 @@ class MossTtsEngine(
         request: TtsRequest,
         onAudioChunk: suspend (AudioChunk) -> Unit,
     ): EngineResult<SynthesisMetrics> {
+        val lifecycleAtRequest = lifecycleState.get()
         gate.lock()
         return try {
-            withContext(Dispatchers.IO) { synthesizeLocked(request, onAudioChunk) }
+            if (isLifecycleRequestInvalidated(lifecycleAtRequest)) {
+                EngineResult.Failure(
+                    EngineError("CANCELLED", "أُلغي طلب التوليد بسبب تحرير المحرك.")
+                )
+            } else {
+                withContext(Dispatchers.IO) {
+                    val result = synthesizeLocked(request, onAudioChunk)
+                    if (isLifecycleRequestInvalidated(lifecycleAtRequest)) {
+                        EngineResult.Failure(
+                            EngineError("CANCELLED", "أُلغي التوليد بسبب تحرير المحرك.")
+                        )
+                    } else {
+                        result
+                    }
+                }
+            }
         } catch (error: Throwable) {
             EngineResult.Failure(EngineError("SYNTHESIS_FAILED", error.message ?: "فشل توليد الصوت", error, true))
         } finally {
@@ -84,17 +118,29 @@ class MossTtsEngine(
     }
 
     override suspend fun release() {
-        // Invalidate the current lifecycle before waiting for the synthesis mutex.
-        releaseRequested.set(true)
+        // Atomically invalidate older requests before waiting for the engine mutex.
+        lifecycleState.updateAndGet { state ->
+            state.copy(
+                generation = state.generation + 1L,
+                pendingReleases = state.pendingReleases + 1,
+            )
+        }
         cancelCurrentSynthesis()
-        gate.lock()
-        try {
-            withContext(Dispatchers.IO) {
-                runtime?.close()
-                runtime = null
+
+        // Resource release must finish even if the caller's coroutine is cancelled.
+        withContext(NonCancellable) {
+            gate.lock()
+            try {
+                withContext(Dispatchers.IO) {
+                    runtime?.close()
+                    runtime = null
+                }
+            } finally {
+                lifecycleState.updateAndGet { state ->
+                    state.copy(pendingReleases = state.pendingReleases - 1)
+                }
+                gate.unlock()
             }
-        } finally {
-            gate.unlock()
         }
     }
 
@@ -468,8 +514,16 @@ class MossTtsEngine(
         }
     }
 
+    private fun isLifecycleRequestInvalidated(requestState: LifecycleState): Boolean {
+        val current = lifecycleState.get()
+        return requestState.pendingReleases > 0 ||
+            current.pendingReleases > 0 ||
+            current.generation != requestState.generation
+    }
+
     private fun isCancellationRequested(cancellation: GenerationCancellation?): Boolean {
-        return releaseRequested.get() || cancellation?.isCancelled() == true
+        return lifecycleState.get().pendingReleases > 0 ||
+            cancellation?.isCancelled() == true
     }
 
     private fun ensureNotCancelled(cancellation: GenerationCancellation?) {

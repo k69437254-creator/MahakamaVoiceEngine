@@ -1,37 +1,65 @@
 package com.aram.voiceengine.app
 
+import android.Manifest
 import android.app.Activity
-import android.os.Bundle
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.View
-import android.widget.*
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Switch
+import android.widget.TextView
+import android.widget.Toast
 import android.text.Editable
+import android.text.InputFilter
 import android.text.TextWatcher
 
 class MainActivity : Activity() {
 
-    private lateinit var root: LinearLayout
+    private lateinit var root: FrameLayout
     private lateinit var regular: Typeface
     private lateinit var medium: Typeface
     private lateinit var semi: Typeface
     private lateinit var bold: Typeface
-    private val prefs by lazy { getSharedPreferences("ishtar_settings", Context.MODE_PRIVATE) }
+
+    private val prefs by lazy {
+        getSharedPreferences("ishtar_settings", Context.MODE_PRIVATE)
+    }
 
     private var page = "home"
     private var draft = ""
+    private var selectedAudioUri: String? = null
+    private var drawerOverlay: View? = null
+    private var pendingAudioExportUri: Uri? = null
 
-    private val bg = Color.rgb(12, 10, 20)
-    private val panel = Color.rgb(25, 21, 37)
-    private val panel2 = Color.rgb(35, 28, 51)
-    private val violet = Color.rgb(151, 104, 235)
-    private val bright = Color.rgb(195, 163, 255)
-    private val white = Color.rgb(247, 243, 255)
-    private val muted = Color.rgb(157, 146, 177)
+    private val bg = Color.rgb(10, 8, 17)
+    private val surface = Color.rgb(22, 18, 32)
+    private val surface2 = Color.rgb(32, 26, 46)
+    private val surface3 = Color.rgb(42, 34, 59)
+    private val violet = Color.rgb(151, 105, 238)
+    private val violetBright = Color.rgb(198, 171, 255)
+    private val white = Color.rgb(247, 244, 252)
+    private val muted = Color.rgb(165, 155, 181)
     private val green = Color.rgb(112, 207, 164)
+    private val amber = Color.rgb(230, 181, 104)
+
+    private companion object {
+        const val REQUEST_OPEN_AUDIO = 7101
+        const val REQUEST_SAVE_TEXT = 7102
+        const val REQUEST_SAVE_AUDIO = 7103
+        const val REQUEST_NOTIFICATIONS = 7104
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,26 +73,44 @@ class MainActivity : Activity() {
         semi = Typeface.createFromAsset(assets, "fonts/IBMPlexSansArabic-SemiBold.ttf")
         bold = Typeface.createFromAsset(assets, "fonts/IBMPlexSansArabic-Bold.ttf")
 
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        draft = prefs.getString("draft_text", "") ?: ""
+        selectedAudioUri = prefs.getString("selected_audio_uri", null)
+
+        root = FrameLayout(this).apply {
             setBackgroundColor(bg)
             layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
-
         setContentView(root)
         render()
     }
 
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
-    private fun text(
+    private fun panel(radius: Int = 20, color: Int = surface): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+        }
+
+    private fun heroBackground(radius: Int = 24): GradientDrawable =
+        GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            intArrayOf(
+                Color.rgb(65, 43, 94),
+                Color.rgb(37, 28, 54),
+                Color.rgb(19, 16, 29)
+            )
+        ).apply { cornerRadius = dp(radius).toFloat() }
+
+    private fun label(
         value: String,
         size: Float = 14f,
         color: Int = white,
         weight: Int = 0,
         gravity: Int = Gravity.RIGHT
     ): TextView = TextView(this).apply {
-        this.text = value
+        text = value
         textSize = size
         setTextColor(color)
         typeface = when (weight) {
@@ -79,91 +125,103 @@ class MainActivity : Activity() {
         setLineSpacing(dp(3).toFloat(), 1f)
     }
 
-    private fun space(parent: LinearLayout, height: Int = 12) {
+    private fun gap(parent: LinearLayout, height: Int = 12) {
         parent.addView(View(this), LinearLayout.LayoutParams(1, dp(height)))
     }
 
-    private fun rounded(color: Int, radius: Int = 20): GradientDrawable =
-        GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radius).toFloat()
-        }
-
-    private fun gradient(radius: Int = 22): GradientDrawable =
-        GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            intArrayOf(Color.rgb(53, 37, 79), Color.rgb(27, 22, 41), Color.rgb(20, 17, 31))
-        ).apply { cornerRadius = dp(radius).toFloat() }
-
-    private fun card(parent: LinearLayout, fancy: Boolean = false): LinearLayout {
-        val box = LinearLayout(this).apply {
+    private fun card(parent: LinearLayout, hero: Boolean = false): LinearLayout {
+        val view = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             setPadding(dp(17), dp(16), dp(17), dp(16))
-            background = if (fancy) gradient() else rounded(panel)
+            background = if (hero) heroBackground() else panel()
         }
-        parent.addView(box, LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(12)
+        parent.addView(view, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(13)
         })
-        return box
+        return view
     }
 
-    private fun label(parent: LinearLayout, value: String, size: Float = 14f,
-                      color: Int = white, weight: Int = 0) {
-        parent.addView(text(value, size, color, weight))
+    private fun pill(value: String, color: Int = violetBright): TextView =
+        label(value, 10f, color, 2, Gravity.CENTER).apply {
+            setPadding(dp(11), dp(7), dp(11), dp(7))
+            background = panel(30, Color.rgb(53, 40, 73))
+        }
+
+    private fun sectionTitle(parent: LinearLayout, title: String, subtitle: String? = null) {
+        parent.addView(label(title, 18f, white, 3))
+        if (subtitle != null) parent.addView(label(subtitle, 11f, muted))
+        gap(parent, 13)
     }
 
-    private fun action(
+    private fun actionCard(
         parent: LinearLayout,
         title: String,
         subtitle: String? = null,
+        enabled: Boolean = true,
         onClick: () -> Unit
     ) {
-        val row = LinearLayout(this).apply {
+        val item = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(15), dp(13), dp(15), dp(13))
-            background = rounded(panel2, 15)
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { onClick() }
+            background = panel(15, surface2)
+            isClickable = enabled
+            isFocusable = enabled
+            alpha = if (enabled) 1f else 0.55f
+            setOnClickListener { if (enabled) { haptic(); onClick() } }
         }
-        row.addView(text(title, 14f, white, 2))
-        if (subtitle != null) {
-            row.addView(text(subtitle, 11f, muted))
-        }
-        parent.addView(row, LinearLayout.LayoutParams(-1, -2).apply {
+        item.addView(label(title, 13f, white, 2))
+        if (subtitle != null) item.addView(label(subtitle, 10f, muted))
+        parent.addView(item, LinearLayout.LayoutParams(-1, -2).apply {
             bottomMargin = dp(9)
         })
     }
 
-    private fun heading(parent: LinearLayout, title: String, subtitle: String? = null) {
-        parent.addView(text(title, 22f, white, 3))
-        if (subtitle != null) {
-            parent.addView(text(subtitle, 12f, muted))
+    private fun primaryButton(value: String, onClick: () -> Unit): TextView =
+        label(value, 13f, Color.WHITE, 2, Gravity.CENTER).apply {
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+            background = panel(14, violet)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { haptic(); onClick() }
         }
-        space(parent, 16)
+
+    private fun secondaryButton(value: String, onClick: () -> Unit): TextView =
+        label(value, 12f, violetBright, 2, Gravity.CENTER).apply {
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            background = panel(14, surface3)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { haptic(); onClick() }
+        }
+
+    private fun haptic() {
+        if (prefs.getBoolean("haptics", false)) {
+            root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        }
     }
 
-    private fun pill(value: String, color: Int = bright): TextView =
-        text(value, 11f, color, 2, Gravity.CENTER).apply {
-            setPadding(dp(12), dp(7), dp(12), dp(7))
-            background = rounded(Color.rgb(49, 37, 69), 30)
-        }
-
     private fun render() {
+        drawerOverlay = null
         root.removeAllViews()
-        root.addView(buildHeader(), LinearLayout.LayoutParams(-1, dp(72)))
+
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setBackgroundColor(bg)
+        }
+        shell.addView(buildHeader(), LinearLayout.LayoutParams(-1, dp(74)))
 
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
-            setPadding(0, 0, 0, dp(10))
+            setPadding(0, 0, 0, dp(12))
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setPadding(dp(19), dp(12), dp(19), dp(18))
+            setPadding(dp(19), dp(12), dp(19), dp(20))
         }
 
         when (page) {
@@ -173,138 +231,137 @@ class MainActivity : Activity() {
             "history" -> history(content)
             "settings" -> settings(content)
             "about" -> about(content)
+            else -> home(content)
         }
 
         scroll.addView(content)
-        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(buildNavigation(), LinearLayout.LayoutParams(-1, dp(76)))
+        shell.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        shell.addView(buildFooter(), LinearLayout.LayoutParams(-1, dp(34)))
+        root.addView(shell, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun buildHeader(): View {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(5))
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(17), dp(7), dp(17), dp(5))
         }
 
-        val mark = TextView(this).apply {
-            text = "I"
-            textSize = 24f
-            typeface = bold
-            setTextColor(white)
-            gravity = Gravity.CENTER
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.rgb(177, 124, 255), Color.rgb(91, 54, 153))
-            ).apply { cornerRadius = dp(14).toFloat() }
+        val menu = label("☰", 21f, white, 2, Gravity.CENTER).apply {
+            background = panel(14, surface2)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "فتح القائمة الجانبية"
+            setOnClickListener { haptic(); showDrawer() }
         }
-        header.addView(mark, LinearLayout.LayoutParams(dp(43), dp(43)))
+        header.addView(menu, LinearLayout.LayoutParams(dp(45), dp(45)))
 
         val brand = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(11), 0, 0, 0)
         }
-        brand.addView(text("ISHTAR", 19f, white, 3).apply {
-            textDirection = View.TEXT_DIRECTION_LTR
-            gravity = Gravity.CENTER_VERTICAL or Gravity.LEFT
-        })
-        brand.addView(text("VOICE ENGINE", 9f, muted, 1).apply {
-            textDirection = View.TEXT_DIRECTION_LTR
-            gravity = Gravity.CENTER_VERTICAL or Gravity.LEFT
-            letterSpacing = 0.12f
-        })
+        brand.addView(label("ISHTAR", 18f, white, 3))
+        brand.addView(label("VOICE ENGINE", 9f, muted, 1))
         header.addView(brand, LinearLayout.LayoutParams(0, -1, 1f))
 
-        val status = text("● قيد التطوير", 10f, bright, 1, Gravity.CENTER).apply {
-            setPadding(dp(11), dp(8), dp(11), dp(8))
-            background = rounded(Color.rgb(43, 32, 62), 30)
-        }
-        header.addView(status)
+        header.addView(pill("نسخة العمل"))
         return header
     }
 
+    private fun buildFooter(): View = label(
+        "ISHTAR  ·  مساحة صوتية مستقلة",
+        9f,
+        Color.rgb(111, 102, 128),
+        1,
+        Gravity.CENTER
+    )
+
     private fun home(parent: LinearLayout) {
-        space(parent, 8)
-        label(parent, "مساحة الصوت تبدأ من هنا", 13f, bright, 1)
-        space(parent, 5)
-        label(parent, "مرحبًا بك في عشتار", 27f, white, 3)
-        label(parent, "محركك الصوتي المستقل، قيد البناء ليمنح كلماتك حياة.", 12f, muted)
-        space(parent, 22)
+        gap(parent, 7)
+        parent.addView(label("مساحتك الخاصة للصوت والكلمة", 12f, violetBright, 1))
+        gap(parent, 5)
+        parent.addView(label("مرحبًا بك في عشتار", 26f, white, 3))
+        parent.addView(label("نصّك ينتظر أن يجد صوته.", 13f, muted))
+        gap(parent, 20)
 
         val hero = card(parent, true)
-        hero.addView(pill("ISHTAR  •  LOCAL VOICE ENGINE"))
-        space(hero, 16)
-        label(hero, "الصوت ليس مجرد كلمات.", 22f, white, 3)
-        label(hero, "إنه الطريقة التي تصل بها الكلمات إلى العالم.", 13f, Color.rgb(207, 192, 229))
-        space(hero, 20)
-        val openStudio = TextView(this).apply {
-            text = "افتح استوديو الصوت   ←"
-            textSize = 13f
-            typeface = semi
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = rounded(violet, 14)
-            isClickable = true
-            setOnClickListener { go("studio") }
-        }
-        hero.addView(openStudio)
+        hero.addView(pill("ISHTAR  /  VOICE WORKSPACE"))
+        gap(hero, 17)
+        hero.addView(label("امنح كلماتك\nمساحةً لتُسمَع.", 25f, white, 3))
+        gap(hero, 8)
+        hero.addView(label(
+            "استوديو هادئ، أدوات واضحة، وبنية مستقلة تتطور لتصبح محركًا صوتيًا قابلًا للدمج.",
+            12f,
+            Color.rgb(215, 203, 232)
+        ))
+        gap(hero, 17)
+        hero.addView(primaryButton("افتح استوديو الصوت  ←") { go("studio") })
 
-        space(parent, 8)
-        heading(parent, "حالة المحرك", "نظرة مباشرة على مكونات عشتار")
+        sectionTitle(parent, "حالة المشروع", "ما هو موجود فعليًا في النسخة الحالية")
         val status = card(parent)
-        val statusRows = listOf(
-            "ترميز النصوص" to "تم تجهيز الدمج",
-            "محرك ONNX" to "بانتظار التنفيذ",
-            "توليد الصوت" to "لم يُفعّل بعد",
-            "تشغيل الصوت" to "بانتظار الربط"
-        )
-        statusRows.forEachIndexed { index, item ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(9), 0, dp(9))
-            }
-            row.addView(text(item.first, 13f, white, 1), LinearLayout.LayoutParams(0, -2, 1f))
-            row.addView(text(item.second, 11f, if (index == 0) bright else muted, 0))
-            status.addView(row)
-            if (index != statusRows.lastIndex) {
-                status.addView(View(this).apply { setBackgroundColor(Color.rgb(48, 41, 61)) },
-                    LinearLayout.LayoutParams(-1, dp(1)))
-            }
-        }
+        statusLine(status, "واجهة التطبيق", "موجودة وقابلة للتطوير", green)
+        statusLine(status, "ترميز SentencePiece", "طبقة JNI موجودة", green)
+        statusLine(status, "تنفيذ ONNX داخل Android", "لم يُربط بعد", amber)
+        statusLine(status, "توليد الصوت الفعلي", "غير متاح في هذه النسخة", amber)
+        statusLine(status, "تشغيل الملفات بالخلفية", "مدعوم عبر خدمة مستقلة", green, false)
 
-        heading(parent, "انتقال سريع", "كل أدواتك في مكان واحد")
-        action(parent, "استوديو الصوت", "اكتب النص وجهّزه للتوليد", { go("studio") })
-        action(parent, "مكتبة الأصوات", "استكشف قسم الأصوات", { go("voices") })
-        action(parent, "سجل التوليد", "ستظهر أعمالك هنا بعد تفعيل التوليد", { go("history") })
+        sectionTitle(parent, "انتقال سريع", "اختر المساحة التي تريد العمل فيها")
+        actionCard(parent, "استوديو الصوت", "كتابة النص وتصديره ومراجعة ملف صوتي", true) { go("studio") }
+        actionCard(parent, "مكتبة الأصوات", "قسم مخصص للأصوات؛ الاختيار مؤجل بقرارك", true) { go("voices") }
+        actionCard(parent, "سجل الأعمال", "سيعرض التسجيلات بعد ربط التوليد الحقيقي", true) { go("history") }
+    }
+
+    private fun statusLine(
+        parent: LinearLayout,
+        name: String,
+        state: String,
+        stateColor: Int,
+        divider: Boolean = true
+    ) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(0, dp(10), 0, dp(10))
+        }
+        row.addView(label(name, 12f, white, 1), LinearLayout.LayoutParams(0, -2, 1f))
+        row.addView(label(state, 10f, stateColor, 1, Gravity.LEFT))
+        parent.addView(row)
+        if (divider) parent.addView(View(this).apply {
+            setBackgroundColor(Color.rgb(52, 43, 67))
+        }, LinearLayout.LayoutParams(-1, dp(1)))
     }
 
     private fun studio(parent: LinearLayout) {
-        heading(parent, "استوديو الصوت", "مساحتك لتحويل النص إلى تجربة صوتية")
+        sectionTitle(parent, "استوديو الصوت", "مساحة تجهيز النصوص والملفات الصوتية")
         val intro = card(parent, true)
-        label(intro, "كل صوت يبدأ بنص.", 21f, white, 3)
-        label(intro, "اكتب ما تريد سماعه، وسنجهّز مساحة العمل حتى يكتمل ربط المحرك.", 12f, Color.rgb(207, 192, 229))
-        space(parent, 12)
+        intro.addView(label("كل تجربة تبدأ\nبكلماتك.", 22f, white, 3))
+        gap(intro, 7)
+        intro.addView(label(
+            "اكتب النص الذي تريد تحويله لاحقًا إلى صوت. سيبقى مسودتك محفوظة على هذا الجهاز.",
+            12f,
+            Color.rgb(215, 203, 232)
+        ))
 
         val editorCard = card(parent)
-        val top = LinearLayout(this).apply {
+        val editorHead = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
-        top.addView(text("النص", 14f, white, 2), LinearLayout.LayoutParams(0, -2, 1f))
-        top.addView(pill("AR / EN"))
-        editorCard.addView(top)
-        space(editorCard, 12)
+        editorHead.addView(label("النص", 14f, white, 2), LinearLayout.LayoutParams(0, -2, 1f))
+        editorHead.addView(pill("AR  /  EN"))
+        editorCard.addView(editorHead)
+        gap(editorCard, 12)
 
-        val counter = text("${draft.length} / 5000", 10f, muted)
+        val counter = label("${draft.length} / 5000", 10f, muted, 0)
         val input = EditText(this).apply {
             setText(draft)
             setTextColor(white)
-            setHintTextColor(muted)
-            hint = "اكتب النص الذي تريد تحويله إلى صوت..."
+            setHintTextColor(Color.rgb(124, 114, 145))
+            hint = "اكتب النص الذي تريد سماعه..."
             textSize = 15f
             typeface = regular
             gravity = Gravity.TOP or Gravity.RIGHT
@@ -313,103 +370,149 @@ class MainActivity : Activity() {
             minLines = 7
             maxLines = 12
             setPadding(dp(14), dp(14), dp(14), dp(14))
-            background = rounded(Color.rgb(17, 14, 26), 14)
+            background = panel(15, Color.rgb(14, 12, 22))
+            filters = arrayOf(InputFilter.LengthFilter(5000))
             addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                     draft = s?.toString() ?: ""
                     counter.text = "${draft.length} / 5000"
+                    prefs.edit().putString("draft_text", draft).apply()
                 }
-                override fun afterTextChanged(s: Editable?) {}
+                override fun afterTextChanged(s: Editable?) = Unit
             })
         }
         editorCard.addView(input, LinearLayout.LayoutParams(-1, -2))
-        space(editorCard, 9)
-
+        gap(editorCard, 8)
         editorCard.addView(counter)
-        input.filters = arrayOf(android.text.InputFilter.LengthFilter(5000))
 
-        space(parent, 5)
-        label(parent, "إعدادات التوليد", 16f, white, 2)
-        space(parent, 10)
-        val options = card(parent)
-        action(options, "الصوت", "اختيار الصوت سيكون متاحًا بعد ربط النموذج") { go("voices") }
-        action(options, "سرعة النطق", "سيتم تفعيل التحكم بها مع محرك التوليد") { notice("إعداد السرعة لم يُربط بعد") }
-
-        val generate = TextView(this).apply {
-            text = "◉   التوليد غير متاح حاليًا"
-            textSize = 14f
-            typeface = semi
-            setTextColor(muted)
-            gravity = Gravity.CENTER
-            setPadding(dp(15), dp(17), dp(15), dp(17))
-            background = rounded(Color.rgb(43, 36, 53), 15)
-            isClickable = true
-            setOnClickListener { notice("سيُفعّل التوليد بعد ربط نماذج MOSS واختبارها") }
+        val textActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
-        parent.addView(generate, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(8)
-            bottomMargin = dp(12)
+        textActions.addView(primaryButton("حفظ النص") { saveText() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        textActions.addView(secondaryButton("مشاركة النص") { shareText() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
+        parent.addView(textActions, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(13)
         })
-        label(parent, "لن يتم إنشاء ملف صوتي حتى يكتمل ربط المحرك واختباره.", 11f, muted)
+
+        sectionTitle(parent, "محرك التوليد", "لن نظهر زرًا يوحي بأن التوليد يعمل قبل ربط المحرك")
+        val engineCard = card(parent)
+        engineCard.addView(pill("ENGINE NOT CONNECTED", amber))
+        gap(engineCard, 10)
+        engineCard.addView(label("التوليد غير متاح بعد", 16f, white, 2))
+        engineCard.addView(label(
+            "توجد واجهات المحرك والترميز، لكن تنفيذ ONNX وملفات النموذج غير موصولة بالتطبيق حتى الآن. لذلك أبقينا التوليد معطّلًا بوضوح.",
+            11f,
+            muted
+        ))
+        gap(engineCard, 12)
+        val disabled = label("◉   التوليد غير متاح حاليًا", 13f, muted, 2, Gravity.CENTER).apply {
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            background = panel(14, Color.rgb(42, 36, 51))
+            alpha = 0.75f
+        }
+        engineCard.addView(disabled)
+
+        sectionTitle(parent, "الصوت والاختيار", "لا يوجد صوت افتراضي معتمد")
+        actionCard(parent, "مكتبة الأصوات", "اختيار الأصوات مؤجل حتى اكتمال المحرك وبموافقتك", true) { go("voices") }
+
+        sectionTitle(parent, "تشغيل ملف صوتي", "تشغيل ملف موجود مع إمكانية استمرار التشغيل بالخلفية")
+        val audioCard = card(parent)
+        if (selectedAudioUri.isNullOrBlank()) {
+            audioCard.addView(label("لم تختر ملفًا صوتيًا بعد", 13f, white, 2))
+            audioCard.addView(label("يمكنك اختيار ملف صوتي محفوظ للاستماع إليه، وسيظهر إشعار تحكم دائم أثناء التشغيل.", 11f, muted))
+        } else {
+            audioCard.addView(label("يوجد ملف صوتي محدد", 13f, white, 2))
+            audioCard.addView(label(selectedAudioUri ?: "", 9f, muted))
+        }
+        gap(audioCard, 12)
+        audioCard.addView(primaryButton("اختيار ملف صوتي") { openAudioPicker() })
+        if (!selectedAudioUri.isNullOrBlank()) {
+            gap(audioCard, 8)
+            audioCard.addView(secondaryButton("تشغيل في الخلفية") { playSelectedAudio() })
+            gap(audioCard, 8)
+            val exportRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+            }
+            exportRow.addView(secondaryButton("حفظ نسخة") { saveAudioCopy() },
+                LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(5) })
+            exportRow.addView(secondaryButton("مشاركة الصوت") { shareAudio() },
+                LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(5) })
+            audioCard.addView(exportRow)
+        }
     }
 
     private fun voices(parent: LinearLayout) {
-        heading(parent, "مكتبة الأصوات", "مساحة إدارة الأصوات المتاحة للمحرك")
+        sectionTitle(parent, "مكتبة الأصوات", "مساحة إدارة الأصوات التي سيتعرف إليها المحرك")
         val hero = card(parent, true)
-        label(hero, "لكل صوت شخصية.", 22f, white, 3)
-        label(hero, "ستظهر هنا الأصوات المرفقة مع نموذج MOSS، مع تفاصيلها وإمكانية الاستماع إليها واختيارها بعد تفعيل التوليد.", 12f, Color.rgb(207, 192, 229))
-        space(hero, 12)
-        hero.addView(pill("اختيار الأصوات لم يُفتح بعد"))
-        space(parent, 8)
-        val waiting = card(parent)
-        label(waiting, "مكتبة الأصوات قيد التجهيز", 16f, white, 2)
-        label(waiting, "لن نختار صوتًا افتراضيًا نيابةً عنك. ستتمكن من معاينة الأصوات واختيار ما يناسبك عندما يصبح تشغيلها متاحًا.", 12f, muted)
-        space(waiting, 14)
-        label(waiting, "الحالة: بانتظار ربط محرك MOSS", 11f, bright, 1)
+        hero.addView(label("لكل صوت\nحضوره الخاص.", 23f, white, 3))
+        gap(hero, 8)
+        hero.addView(label(
+            "ستعرض هذه المكتبة الأصوات المتاحة وبياناتها ومعايناتها، بعد اكتمال مسار التوليد الصوتي.",
+            12f,
+            Color.rgb(215, 203, 232)
+        ))
+        gap(hero, 13)
+        hero.addView(pill("VOICE SELECTION POSTPONED", amber))
+
+        val note = card(parent)
+        note.addView(label("لا اختيار نيابةً عنك", 15f, white, 2))
+        gap(note, 6)
+        note.addView(label(
+            "لن أضيف صوتًا افتراضيًا أو أغيّر خيارات الأصوات. إضافة الأصوات العربية واختيارها مؤجلان إلى ما بعد اكتمال المحرك والتطبيق، وفق قرارك.",
+            12f,
+            muted
+        ))
     }
 
     private fun history(parent: LinearLayout) {
-        heading(parent, "سجل التوليد", "كل أعمالك الصوتية في مكان واحد")
+        sectionTitle(parent, "سجل الأعمال", "مكان واحد للنصوص والملفات التي ينتجها المحرك")
         val empty = card(parent, true)
-        space(empty, 22)
-        empty.addView(text("◷", 42f, bright, 3, Gravity.CENTER))
-        space(empty, 10)
-        label(empty, "لا توجد تسجيلات بعد", 19f, white, 2)
-        label(empty, "عندما يصبح التوليد الصوتي متاحًا، ستجد هنا النصوص والملفات الصوتية السابقة.", 12f, Color.rgb(207, 192, 229))
-        space(empty, 15)
-        val goStudio = TextView(this).apply {
-            text = "الانتقال إلى الاستوديو"
-            textSize = 13f
-            typeface = semi
-            setTextColor(white)
-            gravity = Gravity.CENTER
-            setPadding(dp(14), dp(13), dp(14), dp(13))
-            background = rounded(violet, 13)
-            setOnClickListener { go("studio") }
-        }
-        empty.addView(goStudio)
+        gap(empty, 17)
+        empty.addView(label("◷", 38f, violetBright, 3, Gravity.CENTER))
+        gap(empty, 8)
+        empty.addView(label("لا توجد أعمال مولّدة بعد", 17f, white, 2, Gravity.CENTER))
+        gap(empty, 6)
+        empty.addView(label(
+            "لن نسجل ملفات وهمية. سيظهر هنا كل نص وصوت بعد أن يصبح التوليد الحقيقي متاحًا.",
+            11f,
+            Color.rgb(215, 203, 232),
+            0,
+            Gravity.CENTER
+        ))
+        gap(empty, 14)
+        empty.addView(primaryButton("العودة إلى الاستوديو") { go("studio") })
     }
 
     private fun settings(parent: LinearLayout) {
-        heading(parent, "الإعدادات", "تحكّم بتجربة استخدام عشتار")
-        val appearance = card(parent)
-        label(appearance, "التجربة والمظهر", 15f, white, 2)
-        space(appearance, 12)
-        settingSwitch(appearance, "الحركة والانتقالات", "تفعيل الحركة داخل الواجهة", "animations", true)
-        settingSwitch(appearance, "الاهتزاز اللمسي", "استجابة لمسية عند التفاعل", "haptics", false)
+        sectionTitle(parent, "الإعدادات", "إعدادات محلية تحفظ تفضيلاتك على هذا الجهاز")
+        val preferences = card(parent)
+        preferences.addView(label("التجربة", 15f, white, 2))
+        gap(preferences, 10)
+        settingSwitch(preferences, "الحركة والانتقالات", "تفضيل الحركة داخل الواجهة", "animations", true)
+        settingSwitch(preferences, "الاهتزاز اللمسي", "استجابة لمسية عند الضغط", "haptics", false)
 
-        val system = card(parent)
-        label(system, "إدارة التطبيق", 15f, white, 2)
-        space(system, 10)
-        action(system, "حالة المحرك", "عرض وضع المكونات الحالية") { go("home") }
-        action(system, "معلومات التطبيق", "الإصدار والتفاصيل التقنية") { go("about") }
+        val background = card(parent)
+        background.addView(label("العمل في الخلفية", 15f, white, 2))
+        gap(background, 6)
+        background.addView(label(
+            "عند تشغيل ملف صوتي، تتولى خدمة مستقلة إبقاء التشغيل قائمًا بعد مغادرة التطبيق، مع إشعار دائم يتضمن الإيقاف والاستئناف.",
+            11f,
+            muted
+        ))
+        gap(background, 8)
+        background.addView(pill("FOREGROUND PLAYBACK SERVICE", green))
 
-        val info = card(parent)
-        label(info, "ISHTAR", 18f, white, 3)
-        label(info, "محرك صوتي مستقل قيد التطوير.", 12f, muted)
-        space(info, 5)
-        label(info, "الإصدار 0.1.0", 11f, bright, 1)
+        val app = card(parent)
+        app.addView(label("التطبيق", 15f, white, 2))
+        gap(app, 7)
+        app.addView(label("ISHTAR Voice Engine", 12f, muted))
+        app.addView(label("الإصدار 0.1.0", 11f, violetBright, 1))
+        actionCard(parent, "حول عشتار", "الهوية والبنية التقنية", true) { go("about") }
     }
 
     private fun settingSwitch(
@@ -417,78 +520,124 @@ class MainActivity : Activity() {
         title: String,
         subtitle: String,
         key: String,
-        default: Boolean
+        defaultValue: Boolean
     ) {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(7), 0, dp(7))
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(0, dp(8), 0, dp(8))
         }
-        val labels = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        labels.addView(text(title, 13f, white, 1))
-        labels.addView(text(subtitle, 10f, muted))
-        row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))
+        val words = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        words.addView(label(title, 12f, white, 1))
+        words.addView(label(subtitle, 10f, muted))
+        row.addView(words, LinearLayout.LayoutParams(0, -2, 1f))
         val toggle = Switch(this).apply {
-            isChecked = prefs.getBoolean(key, default)
+            isChecked = prefs.getBoolean(key, defaultValue)
+            buttonTintList = android.content.res.ColorStateList.valueOf(violet)
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(key, checked).apply()
             }
-            buttonTintList = android.content.res.ColorStateList.valueOf(violet)
         }
         row.addView(toggle)
         parent.addView(row)
     }
 
     private fun about(parent: LinearLayout) {
-        heading(parent, "حول عشتار", "هوية المحرك ومعلومات الإصدار")
+        sectionTitle(parent, "حول عشتار", "هوية المحرك ومعلومات النسخة")
         val hero = card(parent, true)
-        hero.addView(text("ISHTAR", 30f, white, 3, Gravity.CENTER))
-        hero.addView(text("VOICE ENGINE", 11f, bright, 1, Gravity.CENTER))
-        space(hero, 18)
-        label(hero, "محرك صوتي مستقل، نصممه ليعمل محليًا على أجهزة Android، مع بنية قابلة للتوسع والتكامل مع مشاريع أخرى.", 13f, Color.rgb(218, 207, 234))
+        hero.addView(label("ISHTAR", 31f, white, 3, Gravity.CENTER))
+        hero.addView(label("VOICE ENGINE", 10f, violetBright, 1, Gravity.CENTER))
+        gap(hero, 18)
+        hero.addView(label(
+            "مشروع مستقل لبناء محرك تحويل النص إلى كلام على Android، ببنية قابلة للفصل والاستدعاء من تطبيقات أخرى.",
+            12f,
+            Color.rgb(215, 203, 232)
+        ))
         val details = card(parent)
-        label(details, "معلومات الإصدار", 15f, white, 2)
-        space(details, 10)
-        label(details, "اسم التطبيق: ISHTAR", 12f, muted)
-        label(details, "الإصدار: 0.1.0", 12f, muted)
-        label(details, "المنصة: Android", 12f, muted)
-        label(details, "حالة المشروع: قيد التطوير", 12f, bright, 1)
-        action(parent, "العودة إلى الإعدادات", "إدارة تجربة التطبيق") { go("settings") }
+        details.addView(label("البنية الحالية", 14f, white, 2))
+        gap(details, 8)
+        details.addView(label("واجهة Android: موجودة", 11f, muted))
+        details.addView(label("SentencePiece JNI: موجود", 11f, muted))
+        details.addView(label("ONNX Android runtime: غير مكتمل", 11f, amber))
+        details.addView(label("ملفات النموذج: خارج المستودع", 11f, amber))
+        details.addView(label("المنصة: Android  ·  RTL", 11f, muted))
     }
 
-    private fun buildNavigation(): View {
-        val nav = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(dp(7), dp(7), dp(7), dp(8))
-            background = rounded(Color.rgb(20, 17, 29), 20)
+    private fun showDrawer() {
+        if (drawerOverlay != null) return
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            isClickable = true
+        }
+        val scrim = View(this).apply {
+            setBackgroundColor(Color.argb(175, 0, 0, 0))
+            setOnClickListener { closeDrawer() }
+        }
+        overlay.addView(scrim, FrameLayout.LayoutParams(-1, -1))
+
+        val drawer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(18), dp(26), dp(18), dp(18))
+            background = panel(0, Color.rgb(19, 15, 29))
+            isClickable = true
         }
+        val params = FrameLayout.LayoutParams(dp(304), -1, Gravity.RIGHT)
+        overlay.addView(drawer, params)
+        drawer.addView(label("ISHTAR", 24f, white, 3))
+        drawer.addView(label("VOICE ENGINE", 9f, violetBright, 1))
+        gap(drawer, 22)
+        drawer.addView(pill("القائمة الرئيسية"))
+        gap(drawer, 14)
+        drawerItem(drawer, "⌂", "الرئيسية", "home")
+        drawerItem(drawer, "◉", "استوديو الصوت", "studio")
+        drawerItem(drawer, "♫", "مكتبة الأصوات", "voices")
+        drawerItem(drawer, "▤", "سجل الأعمال", "history")
+        drawerItem(drawer, "⚙", "الإعدادات", "settings")
+        drawerItem(drawer, "ⓘ", "حول عشتار", "about")
+        val spacer = View(this)
+        drawer.addView(spacer, LinearLayout.LayoutParams(1, 0, 1f))
+        drawer.addView(label("تُفتح هذه القائمة عند الطلب فقط.", 10f, muted))
+        drawer.addView(label("ISHTAR  ·  0.1.0", 9f, Color.rgb(112, 102, 132), 1))
 
-        val items = listOf(
-            Triple("home", "⌂", "الرئيسية"),
-            Triple("studio", "◉", "الاستوديو"),
-            Triple("voices", "♫", "الأصوات"),
-            Triple("history", "▤", "السجل"),
-            Triple("settings", "⚙", "الإعدادات")
-        )
-
-        items.forEach { item ->
-            val active = page == item.first
-            val cell = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                setPadding(dp(2), dp(6), dp(2), dp(5))
-                background = if (active) rounded(Color.rgb(54, 39, 76), 13) else null
-                isClickable = true
-                isFocusable = true
-                setOnClickListener { go(item.first) }
-            }
-            cell.addView(text(item.second, 20f, if (active) bright else muted, 2, Gravity.CENTER))
-            cell.addView(text(item.third, 9f, if (active) white else muted, if (active) 2 else 0, Gravity.CENTER))
-            nav.addView(cell, LinearLayout.LayoutParams(0, -1, 1f))
+        drawerOverlay = overlay
+        root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        if (prefs.getBoolean("animations", true)) {
+            drawer.translationX = dp(28).toFloat()
+            drawer.animate().translationX(0f).setDuration(180).start()
         }
-        return nav
+    }
+
+    private fun drawerItem(parent: LinearLayout, icon: String, title: String, target: String) {
+        val item = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            background = panel(14, if (page == target) surface3 else Color.TRANSPARENT)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { haptic(); closeDrawer(); go(target) }
+        }
+        item.addView(label(icon, 18f, violetBright, 2, Gravity.CENTER),
+            LinearLayout.LayoutParams(dp(32), dp(30)))
+        item.addView(label(title, 13f, white, if (page == target) 2 else 1))
+        parent.addView(item, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(5)
+        })
+    }
+
+    private fun closeDrawer() {
+        val overlay = drawerOverlay ?: return
+        if (prefs.getBoolean("animations", true)) {
+            overlay.animate().alpha(0f).setDuration(120).withEndAction {
+                root.removeView(overlay)
+            }.start()
+        } else {
+            root.removeView(overlay)
+        }
+        drawerOverlay = null
     }
 
     private fun go(target: String) {
@@ -496,7 +645,174 @@ class MainActivity : Activity() {
         render()
     }
 
+    private fun saveText() {
+        if (draft.isBlank()) {
+            notice("اكتب نصًا أولًا قبل التصدير")
+            return
+        }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TITLE, "ISHTAR-Text.txt")
+        }
+        startActivityForResult(intent, REQUEST_SAVE_TEXT)
+    }
+
+    private fun shareText() {
+        if (draft.isBlank()) {
+            notice("لا يوجد نص لمشاركته")
+            return
+        }
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, draft)
+        }
+        startActivity(Intent.createChooser(intent, "مشاركة نص عشتار"))
+    }
+
+    private fun openAudioPicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_OPEN_AUDIO)
+    }
+
+    private fun playSelectedAudio() {
+        val value = selectedAudioUri
+        if (value.isNullOrBlank()) {
+            notice("اختر ملفًا صوتيًا أولًا")
+            return
+        }
+        requestNotificationPermissionIfNeeded()
+        val intent = Intent(this, IshtarPlaybackService::class.java).apply {
+            action = IshtarPlaybackService.ACTION_PLAY
+            putExtra(IshtarPlaybackService.EXTRA_URI, value)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
+            else startService(intent)
+            notice("بدأ تجهيز التشغيل في الخلفية")
+        } catch (error: Exception) {
+            notice("تعذر بدء تشغيل الملف: ${error.message ?: "خطأ غير معروف"}")
+        }
+    }
+
+    private fun saveAudioCopy() {
+        val value = selectedAudioUri
+        if (value.isNullOrBlank()) {
+            notice("اختر ملفًا صوتيًا أولًا")
+            return
+        }
+        pendingAudioExportUri = Uri.parse(value)
+        val mime = contentResolver.getType(pendingAudioExportUri!!) ?: "audio/*"
+        val extension = when (mime.lowercase()) {
+            "audio/mpeg" -> "mp3"
+            "audio/ogg" -> "ogg"
+            "audio/mp4" -> "m4a"
+            else -> "wav"
+        }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mime
+            putExtra(Intent.EXTRA_TITLE, "ISHTAR-Audio.$extension")
+        }
+        startActivityForResult(intent, REQUEST_SAVE_AUDIO)
+    }
+
+    private fun shareAudio() {
+        val value = selectedAudioUri
+        if (value.isNullOrBlank()) {
+            notice("لا يوجد ملف صوتي لمشاركته")
+            return
+        }
+        val uri = Uri.parse(value)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = contentResolver.getType(uri) ?: "audio/*"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(intent, "مشاركة ملف عشتار الصوتي"))
+    }
+
+    @Deprecated("Uses the platform document picker to keep the app free of extra dependencies")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val destination = data?.data ?: return
+
+        when (requestCode) {
+            REQUEST_OPEN_AUDIO -> {
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        destination,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: Exception) {
+                    // Some document providers do not offer persistable permissions.
+                }
+                selectedAudioUri = destination.toString()
+                prefs.edit().putString("selected_audio_uri", selectedAudioUri).apply()
+                notice("تم اختيار الملف الصوتي")
+                render()
+            }
+            REQUEST_SAVE_TEXT -> {
+                try {
+                    contentResolver.openOutputStream(destination)?.use { stream ->
+                        stream.write(draft.toByteArray(Charsets.UTF_8))
+                    } ?: throw IllegalStateException("تعذر فتح الملف للحفظ")
+                    notice("تم حفظ النص")
+                } catch (error: Exception) {
+                    notice("تعذر حفظ النص: ${error.message ?: "خطأ"}")
+                }
+            }
+            REQUEST_SAVE_AUDIO -> {
+                val source = pendingAudioExportUri
+                if (source == null) {
+                    notice("مصدر الملف الصوتي غير متاح")
+                    return
+                }
+                try {
+                    val input = contentResolver.openInputStream(source)
+                        ?: throw IllegalStateException("تعذر قراءة الملف الصوتي")
+                    val output = contentResolver.openOutputStream(destination)
+                        ?: throw IllegalStateException("تعذر فتح وجهة الحفظ")
+                    input.use { sourceStream ->
+                        output.use { targetStream -> sourceStream.copyTo(targetStream) }
+                    }
+                    notice("تم حفظ نسخة من الملف الصوتي")
+                } catch (error: Exception) {
+                    notice("تعذر حفظ الصوت: ${error.message ?: "خطأ"}")
+                } finally {
+                    pendingAudioExportUri = null
+                }
+            }
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
+    }
+
     private fun notice(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    @Deprecated("Back navigation is handled by the activity")
+    override fun onBackPressed() {
+        if (drawerOverlay != null) {
+            closeDrawer()
+            return
+        }
+        if (page != "home") {
+            go("home")
+            return
+        }
+        super.onBackPressed()
     }
 }

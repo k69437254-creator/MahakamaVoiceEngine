@@ -2,6 +2,8 @@ package com.aram.voiceengine.app
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.app.ProgressDialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -42,6 +44,7 @@ class MainActivity : Activity() {
     private var selectedAudioUri: String? = null
     private var drawerOverlay: View? = null
     private var pendingAudioExportUri: Uri? = null
+    private var modelDialog: ProgressDialog? = null
 
     private val bg = Color.rgb(10, 8, 17)
     private val surface = Color.rgb(22, 18, 32)
@@ -82,6 +85,57 @@ class MainActivity : Activity() {
         }
         setContentView(root)
         render()
+        beginModelSetup()
+    }
+
+
+    private fun beginModelSetup() {
+        if (ModelDownloadManager.isInstalled(this)) return
+        val dialog = ProgressDialog(this).apply {
+            setTitle("تهيئة محرك ISHTAR")
+            setMessage("يجري تنزيل ملفات المحرك من Hugging Face لأول مرة. الحجم الإجمالي قد يتجاوز 750 ميغابايت.")
+            setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
+            max = 1000
+            progress = 0
+            setCancelable(false)
+            setButton(ProgressDialog.BUTTON_NEGATIVE, "متابعة لاحقًا") { view, _ -> view.dismiss() }
+            show()
+        }
+        modelDialog = dialog
+        ModelDownloadManager.ensureInstalled(this, object : ModelDownloadManager.Listener {
+            override fun onProgress(value: ModelDownloadManager.Progress) {
+                runOnUiThread {
+                    val active = modelDialog ?: return@runOnUiThread
+                    if (isFinishing || !active.isShowing) return@runOnUiThread
+                    active.progress = if (value.total > 0L)
+                        ((value.done * 1000L) / value.total).toInt().coerceIn(0, 1000) else 0
+                    active.setMessage(
+                        "الملف: " + value.fileName + "\n" +
+                        "تم تنزيل " + (value.done / 1048576L) + " من " +
+                        (value.total / 1048576L) + " ميغابايت\n" +
+                        "يمكن استئناف التنزيل بعد انقطاع الاتصال."
+                    )
+                }
+            }
+            override fun onComplete() {
+                runOnUiThread {
+                    modelDialog?.dismiss()
+                    modelDialog = null
+                    notice("اكتمل تنزيل نماذج ISHTAR والتحقق منها.")
+                }
+            }
+            override fun onError(message: String) {
+                runOnUiThread {
+                    modelDialog?.dismiss()
+                    modelDialog = null
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("لم يكتمل تجهيز المحرك")
+                        .setMessage(message + "\n\nاحتفظ التطبيق بالأجزاء المكتملة، ويمكن استئناف التنزيل عند فتح ISHTAR مجددًا.")
+                        .setPositiveButton("حسنًا", null)
+                        .show()
+                }
+            }
+        })
     }
 
     private fun dp(value: Int): Int =

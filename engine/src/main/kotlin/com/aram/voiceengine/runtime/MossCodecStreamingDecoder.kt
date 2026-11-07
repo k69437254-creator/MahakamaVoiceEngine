@@ -18,7 +18,8 @@ import java.nio.IntBuffer
 class MossCodecStreamingDecoder(
     private val environment: OrtEnvironment,
     private val session: OrtSession,
-    codecMeta: JSONObject
+    codecMeta: JSONObject,
+    private val runOptions: OrtSession.RunOptions? = null
 ) {
     data class DecodedAudio(
         /** Interleaved PCM samples: L, R, L, R, ... for stereo output. */
@@ -259,7 +260,8 @@ class MossCodecStreamingDecoder(
                 )
             }
 
-            session.run(feeds).use { result ->
+            val inference = if (runOptions == null) session.run(feeds) else session.run(feeds, runOptions)
+            inference.use { result ->
                 val audioTensor = requireTensor(result, "audio")
                 val lengthsTensor = requireTensor(result, "audio_lengths")
 

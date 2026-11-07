@@ -357,8 +357,8 @@ class MainActivity : Activity() {
         val status = card(parent)
         statusLine(status, "واجهة التطبيق", "موجودة وقابلة للتطوير", green)
         statusLine(status, "ترميز SentencePiece", "طبقة JNI موجودة", green)
-        statusLine(status, "تنفيذ ONNX داخل Android", "لم يُربط بعد", amber)
-        statusLine(status, "توليد الصوت الفعلي", "غير متاح في هذه النسخة", amber)
+        statusLine(status, "تنفيذ ONNX داخل Android", "مُدمج؛ بانتظار اختبار الجهاز", amber)
+        statusLine(status, "توليد الصوت الفعلي", "بانتظار صوت مرجعي صريح", amber)
         statusLine(status, "تشغيل الملفات بالخلفية", "مدعوم عبر خدمة مستقلة", green, false)
 
         sectionTitle(parent, "انتقال سريع", "اختر المساحة التي تريد العمل فيها")
@@ -454,16 +454,16 @@ class MainActivity : Activity() {
 
         sectionTitle(parent, "محرك التوليد", "لن نظهر زرًا يوحي بأن التوليد يعمل قبل ربط المحرك")
         val engineCard = card(parent)
-        engineCard.addView(pill("ENGINE NOT CONNECTED", amber))
+        engineCard.addView(pill("MOSS PIPELINE INTEGRATED", violetBright))
         gap(engineCard, 10)
-        engineCard.addView(label("التوليد غير متاح بعد", 16f, white, 2))
+        engineCard.addView(label("مسار التوليد والبث مدمج", 16f, white, 2))
         engineCard.addView(label(
-            "توجد واجهات المحرك والترميز، لكن تنفيذ ONNX وملفات النموذج غير موصولة بالتطبيق حتى الآن. لذلك أبقينا التوليد معطّلًا بوضوح.",
+            "تم ربط جلسات MOSS وSentencePiece وفك Codec المتدفق وخدمة AudioTrack. يتطلب بدء التوليد معرف صوت صريحًا أو بيانات صوت مرجعي؛ لم نختر صوتًا افتراضيًا.",
             11f,
             muted
         ))
         gap(engineCard, 12)
-        val disabled = label("◉   التوليد غير متاح حاليًا", 13f, muted, 2, Gravity.CENTER).apply {
+        val disabled = label("◉   بانتظار اعتماد مصدر صوت مرجعي", 13f, muted, 2, Gravity.CENTER).apply {
             setPadding(dp(14), dp(14), dp(14), dp(14))
             background = panel(14, Color.rgb(42, 36, 51))
             alpha = 0.75f
@@ -613,7 +613,7 @@ class MainActivity : Activity() {
         gap(details, 8)
         details.addView(label("واجهة Android: موجودة", 11f, muted))
         details.addView(label("SentencePiece JNI: موجود", 11f, muted))
-        details.addView(label("ONNX Android runtime: غير مكتمل", 11f, amber))
+        details.addView(label("ONNX Android runtime: مدمج؛ ينتظر اختبار الجهاز", 11f, amber))
         details.addView(label("ملفات النموذج: خارج المستودع", 11f, amber))
         details.addView(label("المنصة: Android  ·  RTL", 11f, muted))
     }

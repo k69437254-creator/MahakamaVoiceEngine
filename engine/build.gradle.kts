@@ -24,4 +24,5 @@ android {
 
 dependencies {
     compileOnly("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 }

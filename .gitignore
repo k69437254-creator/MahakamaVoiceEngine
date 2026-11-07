@@ -1,0 +1,16 @@
+.gradle/
+**/build/
+local.properties
+models/
+**/__pycache__/
+*.py[cod]
+*.log
+*.wav
+.env
+.env.*
+*.jks
+*.keystore
+.DS_Store
+
+# Local generated runtime manifest
+scripts/moss_smoke_runtime/browser_poc_manifest.json

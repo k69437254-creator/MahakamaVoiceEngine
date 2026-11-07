@@ -49,6 +49,23 @@ jobs:
           echo "$PROTOC_DIR/bin" >> "$GITHUB_PATH"
           "$PROTOC_DIR/bin/protoc" --version
 
+      - name: Build matching host flatc
+        shell: bash
+        run: |
+          set -euo pipefail
+          FLATBUFFERS_TAG="v25.12.19-2026-02-06-03fffb2"
+          SOURCE_DIR="$RUNNER_TEMP/flatbuffers-src"
+          BUILD_DIR="$RUNNER_TEMP/flatbuffers-build"
+          git clone --depth 1 --branch "$FLATBUFFERS_TAG" https://github.com/google/flatbuffers.git "$SOURCE_DIR"
+          cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" \
+            -DFLATBUFFERS_BUILD_TESTS=OFF \
+            -DFLATBUFFERS_INSTALL=OFF \
+            -DFLATBUFFERS_BUILD_FLATC=ON
+          cmake --build "$BUILD_DIR" --target flatc --parallel 2
+          test -x "$BUILD_DIR/flatc"
+          echo "$BUILD_DIR" >> "$GITHUB_PATH"
+          "$BUILD_DIR/flatc" --version
+
       - name: Build APK
         run: |
           chmod +x gradlew

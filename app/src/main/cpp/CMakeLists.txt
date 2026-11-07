@@ -3,6 +3,15 @@ project(ishtar_tokenizer LANGUAGES CXX)
 
 include(FetchContent)
 
+# Use host code generators during the Android cross-build.
+find_program(HOST_FLATC_EXECUTABLE flatc REQUIRED)
+set(
+    SPM_FLATC_EXECUTABLE
+    "${HOST_FLATC_EXECUTABLE}"
+    CACHE FILEPATH "Host flatc used to generate SentencePiece Lite sources"
+    FORCE
+)
+
 # Use host protoc during the Android cross-build.
 find_program(HOST_PROTOC_EXECUTABLE protoc REQUIRED)
 set(

@@ -12,6 +12,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.net.Uri
+import android.util.Log
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -136,7 +137,17 @@ class IshtarPlaybackService : Service() {
                 localWakeLock = wakeLock
                 generationWakeLock = wakeLock
                 val referenceAudio = if (!referenceAudioUri.isNullOrBlank()) {
-                    val decoded = AndroidReferenceAudioDecoder.decode(applicationContext, Uri.parse(referenceAudioUri))
+                    withContext(Dispatchers.Main) {
+                        currentMessage = "فك التسجيل المرجعي"
+                        updateNotification()
+                    }
+                    val decoded = AndroidReferenceAudioDecoder.decode(
+                        applicationContext, Uri.parse(referenceAudioUri)
+                    )
+                    withContext(Dispatchers.Main) {
+                        currentMessage = "ترميز التسجيل المرجعي"
+                        updateNotification()
+                    }
                     MossReferenceAudioEncoder(applicationContext).use { encoder ->
                         encoder.encode(decoded.samples, decoded.sampleRate, decoded.channels)
                     }
@@ -225,8 +236,10 @@ class IshtarPlaybackService : Service() {
             } catch (error: CancellationException) {
                 token.cancel()
             } catch (error: Throwable) {
+                Log.e("IshtarPlaybackService", "Synthesis failed", error)
                 withContext(Dispatchers.Main) {
                     currentMessage = error.message ?: "تعذر توليد الصوت"
+                    updateNotification()
                     Toast.makeText(this@IshtarPlaybackService, currentMessage, Toast.LENGTH_LONG).show()
                 }
             } finally {

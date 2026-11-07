@@ -7,6 +7,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -25,6 +26,7 @@ internal data class DecodedReferenceAudio(
 internal object AndroidReferenceAudioDecoder {
     private const val MAX_REFERENCE_DURATION_US = 30_000_000L
     private const val DECODE_TIMEOUT_MS = 120_000L
+    private const val TAG = "IshtarReferenceDecoder"
 
     fun decode(context: Context, uri: Uri): DecodedReferenceAudio {
         val extractor = MediaExtractor()
@@ -60,10 +62,31 @@ internal object AndroidReferenceAudioDecoder {
             var outputDone = false
             var outputFormat: MediaFormat? = null
             val startedAt = SystemClock.elapsedRealtime()
+            var lastProgressAt = startedAt
+            var inputBuffersQueued = 0
+            var outputBuffersDequeued = 0
+            var outputBytes = 0L
+            var lastInputSampleTimeUs = -1L
+            var lastOutputPresentationTimeUs = -1L
+            var inputEosQueued = false
+            var outputEosReceived = false
 
             while (!outputDone) {
-                check(SystemClock.elapsedRealtime() - startedAt < DECODE_TIMEOUT_MS) {
-                    "انتهت مهلة فك الملف الصوتي المرجعي."
+                val now = SystemClock.elapsedRealtime()
+                if (now - startedAt >= DECODE_TIMEOUT_MS) {
+                    val diagnostic = "Reference decode timeout: " +
+                        "elapsedMs=${now - startedAt}, stalledMs=${now - lastProgressAt}, " +
+                        "inputBuffersQueued=$inputBuffersQueued, " +
+                        "outputBuffersDequeued=$outputBuffersDequeued, " +
+                        "outputBytes=$outputBytes, " +
+                        "lastInputSampleTimeUs=$lastInputSampleTimeUs, " +
+                        "lastOutputPresentationTimeUs=$lastOutputPresentationTimeUs, " +
+                        "inputDone=$inputDone, outputDone=$outputDone, " +
+                        "inputEosQueued=$inputEosQueued, " +
+                        "outputEosReceived=$outputEosReceived, " +
+                        "extractorSampleTimeUs=${extractor.sampleTime}"
+                    Log.e(TAG, diagnostic)
+                    error(diagnostic)
                 }
 
                 if (!inputDone) {
@@ -83,10 +106,16 @@ internal object AndroidReferenceAudioDecoder {
                                 inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM
                             )
                             inputDone = true
+                            inputEosQueued = true
+                            inputBuffersQueued++
+                            lastProgressAt = SystemClock.elapsedRealtime()
                         } else {
                             decoder.queueInputBuffer(
                                 inputIndex, 0, sampleSize, sampleTime, extractor.sampleFlags
                             )
+                            inputBuffersQueued++
+                            lastInputSampleTimeUs = sampleTime
+                            lastProgressAt = SystemClock.elapsedRealtime()
                             extractor.advance()
                         }
                     }
@@ -98,6 +127,9 @@ internal object AndroidReferenceAudioDecoder {
                         outputFormat = decoder.outputFormat
                     }
                     outputIndex >= 0 -> {
+                        outputBuffersDequeued++
+                        lastOutputPresentationTimeUs = info.presentationTimeUs
+                        lastProgressAt = SystemClock.elapsedRealtime()
                         if (info.size > 0 &&
                             (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
                         ) {
@@ -108,8 +140,10 @@ internal object AndroidReferenceAudioDecoder {
                             val chunk = ByteArray(info.size)
                             outputBuffer.get(chunk)
                             bytes.write(chunk)
+                            outputBytes += info.size.toLong()
                         }
                         outputDone = (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                        if (outputDone) outputEosReceived = true
                         decoder.releaseOutputBuffer(outputIndex, false)
                     }
                 }

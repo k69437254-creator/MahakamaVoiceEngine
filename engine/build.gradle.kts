@@ -21,9 +21,7 @@ android {
     }
 }
 
-val onnxAar = file("${System.getenv("TMPDIR")}/onnxruntime-android.aar")
-check(onnxAar.isFile) { "ONNX Runtime AAR not found: $onnxAar" }
 
 dependencies {
-    compileOnly(files(onnxAar))
+    compileOnly("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
 }

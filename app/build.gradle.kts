@@ -25,10 +25,8 @@ android {
     }
 }
 
-val onnxAar = file("${System.getenv("TMPDIR")}/onnxruntime-android.aar")
-check(onnxAar.isFile) { "ONNX Runtime AAR not found: $onnxAar" }
 
 dependencies {
     implementation(project(":engine"))
-    implementation(files(onnxAar))
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
 }
